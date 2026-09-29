@@ -109,3 +109,10 @@ export class UpdateCouponDto {
   @IsBoolean()
   is_active?: boolean;
 }
+
+export class ValidateCouponDto {
+  @IsString()
+  @IsNotEmpty()
+  @Length(2, 50)
+  code!: string;
+}

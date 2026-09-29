@@ -35,7 +35,6 @@ export class ProductController extends BaseController {
   }
 
   public _initialiseRoutes(): void {
-    console.log('Product routes initialized:', this.path);
     this.router.get(
       this.path,
       this.getProducts.bind(this)

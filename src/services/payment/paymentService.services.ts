@@ -18,6 +18,7 @@ import {
   PaymentEntity,
   PaymentStatus,
 } from '../../entities/paymentEntity';
+import { AuditLogEntity } from '../../entities/auditLogEntity';
 
 import {
   OrderEntity,
@@ -177,6 +178,42 @@ class PaymentService extends BaseServices<
           await manager.save(
             OrderEntity,
             order
+          );
+
+          const isSuccess =
+            dto.outcome ===
+            SimulatedPaymentOutcome.SUCCESS;
+
+          const auditLog = manager.create(
+            AuditLogEntity,
+            {
+              user_id: userId,
+              action: isSuccess
+                ? 'PAYMENT_SUCCESS'
+                : 'PAYMENT_FAILED',
+              entity_type: 'PAYMENT',
+              entity_id: String(
+                savedPayment.id
+              ),
+              metadata: {
+                order_id: order.id,
+                order_number:
+                  order.order_number,
+                amount:
+                  savedPayment.amount,
+                status:
+                  savedPayment.status,
+                provider:
+                  savedPayment.provider,
+                provider_reference:
+                  savedPayment.provider_reference,
+              },
+            }
+          );
+
+          await manager.save(
+            AuditLogEntity,
+            auditLog
           );
 
           return savedPayment.id;

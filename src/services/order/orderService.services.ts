@@ -25,6 +25,7 @@ import {
 } from '../../entities/orderEntity';
 
 import { OrderItemEntity } from '../../entities/orderItemEntity';
+import { AuditLogEntity } from '../../entities/auditLogEntity';
 
 import { CartEntity } from '../../entities/cartEntity';
 import { CartItemEntity } from '../../entities/cartItemEntity';
@@ -40,6 +41,7 @@ import {
 
 import {
   BadRequestError,
+  ForbiddenError,
   NotFoundError,
 } from '../../core/ApiError';
 
@@ -63,10 +65,14 @@ class OrderService extends BaseServices<
   }
 
   public async getOrdersForUser(
-    userId: number
-  ): Promise<OrderModel[]> {
-    const orders =
-      await OrderEntity.find({
+    userId: number,
+    page: number = 1,
+    limit: number = 10
+  ): Promise<PaginatedOrdersResponse> {
+    const skip = (page - 1) * limit;
+
+    const [orders, total] =
+      await OrderEntity.findAndCount({
         where: {
           user_id: userId,
           is_delete: 0,
@@ -74,25 +80,73 @@ class OrderService extends BaseServices<
         order: {
           id: 'DESC',
         },
+        skip,
+        take: limit,
       });
 
-    return Promise.all(
+    const items = await Promise.all(
       orders.map(
         (order) =>
           this.toModel(order)
       )
     );
+
+    return {
+      orders: items,
+      page,
+      limit,
+      total,
+      totalPages:
+        total === 0
+          ? 0
+          : Math.ceil(total / limit),
+    };
   }
 
-  public async getOrderByIdForUser(
-    userId: number,
+  public async getAllOrders(
+    page: number = 1,
+    limit: number = 10
+  ): Promise<PaginatedOrdersResponse> {
+    const skip = (page - 1) * limit;
+
+    const [orders, total] =
+      await OrderEntity.findAndCount({
+        where: {
+          is_delete: 0,
+        },
+        order: {
+          id: 'DESC',
+        },
+        skip,
+        take: limit,
+      });
+
+    const items = await Promise.all(
+      orders.map(
+        (order) =>
+          this.toModel(order)
+      )
+    );
+
+    return {
+      orders: items,
+      page,
+      limit,
+      total,
+      totalPages:
+        total === 0
+          ? 0
+          : Math.ceil(total / limit),
+    };
+  }
+
+  public async getOrderById(
     orderId: number
   ): Promise<OrderModel> {
     const order =
       await OrderEntity.findOne({
         where: {
           id: orderId,
-          user_id: userId,
           is_delete: 0,
         },
       });
@@ -106,10 +160,38 @@ class OrderService extends BaseServices<
     return this.toModel(order);
   }
 
+  public async getOrderByIdForUser(
+    userId: number,
+    orderId: number
+  ): Promise<OrderModel> {
+    const order =
+      await OrderEntity.findOne({
+        where: {
+          id: orderId,
+          is_delete: 0,
+        },
+      });
+
+    if (!order) {
+      throw new NotFoundError(
+        'Order not found'
+      );
+    }
+
+    if (order.user_id !== userId) {
+      throw new ForbiddenError(
+        'You do not have permission to access this order'
+      );
+    }
+
+    return this.toModel(order);
+  }
+
   // NEW: ADMIN / OPERATIONS order status update
   public async updateOrderStatus(
     orderId: number,
-    newStatus: OrderStatus
+    newStatus: OrderStatus,
+    userId?: number
   ): Promise<OrderModel> {
     const updatedOrderId =
       await this.database.runInTransaction(
@@ -143,6 +225,8 @@ class OrderService extends BaseServices<
             );
           }
 
+          const previousStatus = order.status;
+
           this.validateStatusTransition(
             order.status,
             newStatus
@@ -155,6 +239,19 @@ class OrderService extends BaseServices<
             OrderEntity,
             order
           );
+
+          const auditLog = manager.create(AuditLogEntity, {
+            user_id: userId ?? null,
+            action: 'ORDER_STATUS_CHANGED',
+            entity_type: 'ORDER',
+            entity_id: String(order.id),
+            metadata: {
+              previous_status: previousStatus,
+              new_status: newStatus,
+              order_number: order.order_number,
+            },
+          });
+          await manager.save(AuditLogEntity, auditLog);
 
           return order.id;
         }
@@ -448,6 +545,19 @@ class OrderService extends BaseServices<
             cartItems
           );
 
+          const auditLog = manager.create(AuditLogEntity, {
+            user_id: userId,
+            action: 'ORDER_CREATED',
+            entity_type: 'ORDER',
+            entity_id: String(savedOrder.id),
+            metadata: {
+              order_number: savedOrder.order_number,
+              grand_total: savedOrder.grand_total,
+              items_count: orderItems.length,
+            },
+          });
+          await manager.save(AuditLogEntity, auditLog);
+
           return savedOrder.id;
         }
       );
@@ -739,7 +849,7 @@ class OrderService extends BaseServices<
       );
     }
 
-    let discountInCents = 0;
+    let discountInCents: number;
 
     if (
       coupon.type ===
@@ -950,6 +1060,14 @@ class OrderService extends BaseServices<
 
     return model;
   }
+}
+
+export interface PaginatedOrdersResponse {
+  orders: OrderModel[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
 }
 
 export default OrderService;

@@ -1,4 +1,4 @@
-import { Raw } from 'typeorm';
+import { In, Raw } from 'typeorm';
 
 import { BaseServices } from '../baseService.services';
 
@@ -6,6 +6,10 @@ import {
   CouponEntity,
   CouponType,
 } from '../../entities/couponEntity';
+import { CartEntity } from '../../entities/cartEntity';
+import { CartItemEntity } from '../../entities/cartItemEntity';
+import { ProductEntity } from '../../entities/productEntity';
+import { AuditLogEntity } from '../../entities/auditLogEntity';
 
 import {
   CouponModel,
@@ -136,6 +140,17 @@ class CouponService extends BaseServices<
 
     const savedCoupon =
       await coupon.save();
+
+    await AuditLogEntity.create({
+      action: 'COUPON_CREATED',
+      entity_type: 'COUPON',
+      entity_id: String(savedCoupon.id),
+      metadata: {
+        code: savedCoupon.code,
+        type: savedCoupon.type,
+        discount_value: savedCoupon.discount_value,
+      },
+    }).save();
 
     return this.toModel(
       savedCoupon
@@ -282,6 +297,17 @@ class CouponService extends BaseServices<
     const savedCoupon =
       await coupon.save();
 
+    await AuditLogEntity.create({
+      action: 'COUPON_UPDATED',
+      entity_type: 'COUPON',
+      entity_id: String(savedCoupon.id),
+      metadata: {
+        code: savedCoupon.code,
+        type: savedCoupon.type,
+        is_active: savedCoupon.is_active,
+      },
+    }).save();
+
     return this.toModel(
       savedCoupon
     );
@@ -299,6 +325,16 @@ class CouponService extends BaseServices<
 
     const savedCoupon =
       await coupon.save();
+
+    await AuditLogEntity.create({
+      action: 'COUPON_DEACTIVATED',
+      entity_type: 'COUPON',
+      entity_id: String(savedCoupon.id),
+      metadata: {
+        code: savedCoupon.code,
+        is_active: false,
+      },
+    }).save();
 
     return this.toModel(
       savedCoupon
@@ -517,6 +553,136 @@ class CouponService extends BaseServices<
 
     return model;
   }
+
+  public async validateCouponForCart(
+    userId: number,
+    code: string
+  ): Promise<CouponValidationResult> {
+    const cart = await CartEntity.findOne({
+      where: {
+        user_id: userId,
+        is_delete: 0,
+      },
+    });
+
+    if (!cart) {
+      throw new BadRequestError('Cart is empty');
+    }
+
+    const cartItems = await CartItemEntity.find({
+      where: {
+        cart_id: cart.id,
+        is_delete: 0,
+      },
+    });
+
+    if (cartItems.length === 0) {
+      throw new BadRequestError('Cart is empty');
+    }
+
+    const productIds = cartItems.map((item) => item.product_id);
+    const products = await ProductEntity.find({
+      where: {
+        id: In(productIds),
+        is_delete: 0,
+        is_active: true,
+      },
+    });
+
+    const productMap = new Map(products.map((p) => [p.id, p]));
+
+    let subtotalInCents = 0;
+    for (const item of cartItems) {
+      const product = productMap.get(item.product_id);
+      if (!product) {
+        throw new BadRequestError('Product in cart is no longer available');
+      }
+      const unitPriceInCents = Math.round(Number(product.price) * 100);
+      subtotalInCents += unitPriceInCents * item.quantity;
+    }
+
+    const normalizedCode = code.trim().toUpperCase();
+    const coupon = await CouponEntity.findOne({
+      where: {
+        code: normalizedCode,
+        is_active: true,
+        is_delete: 0,
+      },
+    });
+
+    if (!coupon) {
+      throw new BadRequestError('Coupon is invalid or inactive');
+    }
+
+    const now = new Date();
+
+    if (coupon.start_date && now < coupon.start_date) {
+      throw new BadRequestError('Coupon is not active yet');
+    }
+
+    if (coupon.expiry_date && now > coupon.expiry_date) {
+      throw new BadRequestError('Coupon has expired');
+    }
+
+    if (coupon.usage_limit !== null && coupon.used_count >= coupon.usage_limit) {
+      throw new BadRequestError('Coupon usage limit reached');
+    }
+
+    const minimumOrderInCents = coupon.minimum_order_value
+      ? Math.round(Number(coupon.minimum_order_value) * 100)
+      : 0;
+
+    if (subtotalInCents < minimumOrderInCents) {
+      throw new BadRequestError('Order does not meet coupon minimum value');
+    }
+
+    let discountInCents: number;
+
+    if (coupon.type === CouponType.PERCENTAGE) {
+      discountInCents = Math.round(
+        subtotalInCents * (Number(coupon.discount_value) / 100)
+      );
+    } else {
+      discountInCents = Math.round(Number(coupon.discount_value) * 100);
+    }
+
+    if (coupon.maximum_discount) {
+      const maximumDiscountInCents = Math.round(
+        Number(coupon.maximum_discount) * 100
+      );
+      discountInCents = Math.min(discountInCents, maximumDiscountInCents);
+    }
+
+    discountInCents = Math.min(discountInCents, subtotalInCents);
+
+    return {
+      coupon: {
+        id: coupon.id,
+        code: coupon.code,
+        type: coupon.type,
+        discount_value: coupon.discount_value,
+        minimum_order_value: coupon.minimum_order_value,
+        maximum_discount: coupon.maximum_discount,
+      },
+      subtotal: (subtotalInCents / 100).toFixed(2),
+      discount: (discountInCents / 100).toFixed(2),
+      payable_amount: ((subtotalInCents - discountInCents) / 100).toFixed(2),
+    };
+  }
+}
+
+export interface CouponValidationResult {
+  coupon: {
+    id: number;
+    code: string;
+    type: CouponType;
+    discount_value: string;
+    minimum_order_value: string | null;
+    maximum_discount: string | null;
+  };
+  subtotal: string;
+  discount: string;
+  payable_amount: string;
 }
 
 export default CouponService;

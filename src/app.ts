@@ -16,6 +16,8 @@ import { AddressController } from './controllers/address/addressController.contr
 import { CouponController } from './controllers/coupon/couponController.controller';
 import { OrderController } from './controllers/order/orderController.controller';
 import { PaymentController } from './controllers/payment/paymentController.controller';
+import { HealthController } from './controllers/health/healthController.controller';
+import { AuditLogController } from './controllers/auditLog/auditLogController.controller';
 
 export class App {
   public app: express.Application;
@@ -64,17 +66,6 @@ export class App {
   }
 
   private initializeControllers(): void {
-    this.app.post(
-  '/api/v1/orders-test',
-  (
-    _req: express.Request,
-    res: express.Response
-  ) => {
-    res.status(200).json({
-      message: 'Order test route works',
-    });
-  }
-);
     const authController =
       new AuthController();
 
@@ -98,8 +89,22 @@ export class App {
 
     const orderController =
       new OrderController();
-      const paymentController =
-  new PaymentController();
+    const paymentController =
+      new PaymentController();
+    const healthController =
+      new HealthController();
+    const auditLogController =
+      new AuditLogController();
+
+    this.app.use(
+      PATH,
+      healthController.router
+    );
+
+    this.app.use(
+      PATH,
+      auditLogController.router
+    );
 
     this.app.use(
       PATH,

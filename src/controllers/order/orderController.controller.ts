@@ -63,7 +63,7 @@ export class OrderController extends BaseController {
       this.checkout.bind(this)
     );
 
-    // CUSTOMER: get own orders
+    // CUSTOMER: get own orders (paginated)
     this.router.get(
       this.path,
       authMiddleware,
@@ -71,6 +71,28 @@ export class OrderController extends BaseController {
         UserRole.CUSTOMER
       ),
       this.getOrders.bind(this)
+    );
+
+    // ADMIN / OPERATIONS: get all orders (paginated)
+    this.router.get(
+      `${this.path}/admin`,
+      authMiddleware,
+      authorizeRoles(
+        UserRole.ADMIN,
+        UserRole.OPERATIONS
+      ),
+      this.getAllOrdersForStaff.bind(this)
+    );
+
+    // ADMIN / OPERATIONS: get order by id
+    this.router.get(
+      `${this.path}/admin/:id`,
+      authMiddleware,
+      authorizeRoles(
+        UserRole.ADMIN,
+        UserRole.OPERATIONS
+      ),
+      this.getOrderByIdForStaff.bind(this)
     );
 
     // ADMIN / OPERATIONS: update order status
@@ -87,12 +109,14 @@ export class OrderController extends BaseController {
       this.updateOrderStatus.bind(this)
     );
 
-    // CUSTOMER: get one own order
+    // CUSTOMER (own order) or ADMIN / OPERATIONS (any order)
     this.router.get(
       `${this.path}/:id`,
       authMiddleware,
       authorizeRoles(
-        UserRole.CUSTOMER
+        UserRole.CUSTOMER,
+        UserRole.ADMIN,
+        UserRole.OPERATIONS
       ),
       this.getOrderById.bind(this)
     );
@@ -135,15 +159,75 @@ export class OrderController extends BaseController {
       const userId =
         this.getUserId(req);
 
-      const orders =
+      const { page, limit } =
+        this.parsePaginationParams(req);
+
+      const result =
         await this.service
           .getOrdersForUser(
-            userId
+            userId,
+            page,
+            limit
           );
 
       new SuccessResponse(
         'Orders fetched successfully',
-        orders
+        result
+      ).send(res);
+    } catch (error) {
+      this.handleControllerError(
+        error,
+        res
+      );
+    }
+  }
+
+  private async getAllOrdersForStaff(
+    req: express.Request,
+    res: express.Response
+  ): Promise<void> {
+    try {
+      const { page, limit } =
+        this.parsePaginationParams(req);
+
+      const result =
+        await this.service
+          .getAllOrders(
+            page,
+            limit
+          );
+
+      new SuccessResponse(
+        'Orders fetched successfully',
+        result
+      ).send(res);
+    } catch (error) {
+      this.handleControllerError(
+        error,
+        res
+      );
+    }
+  }
+
+  private async getOrderByIdForStaff(
+    req: express.Request,
+    res: express.Response
+  ): Promise<void> {
+    try {
+      const orderId =
+        this.validateId(
+          req.params.id
+        );
+
+      const order =
+        await this.service
+          .getOrderById(
+            orderId
+          );
+
+      new SuccessResponse(
+        'Order fetched successfully',
+        order
       ).send(res);
     } catch (error) {
       this.handleControllerError(
@@ -158,20 +242,33 @@ export class OrderController extends BaseController {
     res: express.Response
   ): Promise<void> {
     try {
-      const userId =
-        this.getUserId(req);
+      const authUser =
+        this.getAuthUser(req);
 
       const orderId =
         this.validateId(
           req.params.id
         );
 
-      const order =
-        await this.service
-          .getOrderByIdForUser(
-            userId,
-            orderId
-          );
+      let order;
+
+      if (
+        authUser.role ===
+        UserRole.CUSTOMER
+      ) {
+        order =
+          await this.service
+            .getOrderByIdForUser(
+              authUser.userId,
+              orderId
+            );
+      } else {
+        order =
+          await this.service
+            .getOrderById(
+              orderId
+            );
+      }
 
       new SuccessResponse(
         'Order fetched successfully',
@@ -195,6 +292,9 @@ export class OrderController extends BaseController {
           req.params.id
         );
 
+      const authUser =
+        this.getAuthUser(req);
+
       const dto =
         req.body as UpdateOrderStatusDto;
 
@@ -202,7 +302,8 @@ export class OrderController extends BaseController {
         await this.service
           .updateOrderStatus(
             orderId,
-            dto.status
+            dto.status,
+            authUser.userId
           );
 
       new SuccessResponse(
@@ -240,6 +341,65 @@ export class OrderController extends BaseController {
     }
 
     return userId;
+  }
+
+  private getAuthUser(
+    req: express.Request
+  ): {
+    userId: number;
+    email: string;
+    role: UserRole;
+  } {
+    const authenticatedRequest =
+      req as express.Request & {
+        authUser?: {
+          userId: number;
+          email: string;
+          role: UserRole;
+        };
+      };
+
+    const authUser =
+      authenticatedRequest.authUser;
+
+    if (!authUser || !authUser.userId) {
+      throw new AuthFailureError(
+        'Authenticated user not found'
+      );
+    }
+
+    return authUser;
+  }
+
+  private parsePaginationParams(
+    req: express.Request
+  ): {
+    page: number;
+    limit: number;
+  } {
+    let page = 1;
+    let limit = 10;
+
+    if (req.query.page !== undefined) {
+      const parsedPage = Number(req.query.page);
+      if (!Number.isInteger(parsedPage) || parsedPage <= 0) {
+        throw new BadRequestError('Invalid page number');
+      }
+      page = parsedPage;
+    }
+
+    if (req.query.limit !== undefined) {
+      const parsedLimit = Number(req.query.limit);
+      if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
+        throw new BadRequestError('Invalid limit number');
+      }
+      if (parsedLimit > 100) {
+        throw new BadRequestError('Limit cannot exceed 100');
+      }
+      limit = parsedLimit;
+    }
+
+    return { page, limit };
   }
 
   private validateId(

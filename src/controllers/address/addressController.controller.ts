@@ -50,7 +50,6 @@ export class AddressController extends BaseController {
   }
 
   public _initialiseRoutes(): void {
-    console.log('Address routes initialized:', this.path);
     this.router.get(
       this.path,
       authMiddleware,

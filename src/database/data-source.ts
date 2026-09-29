@@ -13,13 +13,28 @@ import { PaymentEntity } from '../entities/paymentEntity';
 import { AuditLogEntity } from '../entities/auditLogEntity';
 
 export const getPostgresConnection = (): DataSource => {
+  const connectionConfig =
+    process.env.DB_DATABASE || process.env.DB_HOST
+      ? {
+          host: process.env.DB_HOST || '127.0.0.1',
+          port: Number(process.env.DB_PORT) || 5432,
+          username: process.env.DB_USERNAME || 'postgres',
+          password: process.env.DB_PASSWORD || '',
+          database: process.env.DB_DATABASE || 'order_management',
+        }
+      : process.env.DATABASE_URL
+      ? { url: process.env.DATABASE_URL }
+      : {
+          host: '127.0.0.1',
+          port: 5432,
+          username: 'postgres',
+          password: '',
+          database: 'order_management',
+        };
+
   const postgresConnection = new DataSource({
     type: 'postgres',
-    host: process.env.DB_HOST,
-    port: Number(process.env.DB_PORT),
-    username: process.env.DB_USERNAME,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_DATABASE,
+    ...connectionConfig,
     entities: [
       UsersEntity,
       CategoryEntity,

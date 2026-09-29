@@ -8,6 +8,7 @@ import CouponService from '../../services/coupon/couponService.services';
 import {
   CreateCouponDto,
   UpdateCouponDto,
+  ValidateCouponDto,
 } from '../../database/repository/coupon/coupon.dto';
 
 import authMiddleware from '../../middlewares/authMiddleware';
@@ -21,6 +22,7 @@ import { UserRole } from '../../entities/usersEntity';
 
 import {
   ApiError,
+  AuthFailureError,
   BadRequestError,
   InternalError,
 } from '../../core/ApiError';
@@ -48,10 +50,18 @@ export class CouponController extends BaseController {
   }
 
   public _initialiseRoutes(): void {
-    console.log(
-  'Coupon routes initialized:',
-  this.path
-);
+    this.router.post(
+      `${this.path}/validate`,
+      authMiddleware,
+      authorizeRoles(
+        UserRole.CUSTOMER
+      ),
+      validationFDMiddleware(
+        ValidateCouponDto
+      ),
+      this.validateCoupon.bind(this)
+    );
+
     this.router.get(
       this.path,
       authMiddleware,
@@ -219,6 +229,57 @@ export class CouponController extends BaseController {
     }
 
     return id;
+  }
+
+  private async validateCoupon(
+    req: express.Request,
+    res: express.Response
+  ): Promise<void> {
+    try {
+      const userId = this.getUserId(req);
+      const dto = req.body as ValidateCouponDto;
+
+      const result =
+        await this.service.validateCouponForCart(
+          userId,
+          dto.code
+        );
+
+      new SuccessResponse(
+        'Coupon validated successfully',
+        result
+      ).send(res);
+    } catch (error) {
+      this.handleControllerError(
+        error,
+        res
+      );
+    }
+  }
+
+  private getUserId(
+    req: express.Request
+  ): number {
+    const authenticatedRequest =
+      req as express.Request & {
+        authUser?: {
+          userId: number;
+          email: string;
+          role: string;
+        };
+      };
+
+    const userId =
+      authenticatedRequest
+        .authUser?.userId;
+
+    if (!userId) {
+      throw new AuthFailureError(
+        'Authenticated user not found'
+      );
+    }
+
+    return userId;
   }
 
   private handleControllerError(
